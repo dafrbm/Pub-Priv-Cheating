@@ -26,29 +26,22 @@ library(knitr)
 
 #Original approach (Declare Design guides)
 
-M1 <-
+set.seed(9202)
+
+model <-
   declare_model(
     N = 100,
     type = 
       rep(c("Always-Taker", "Never-Taker", "Complier", "Defier"),
           c(0.2, 0.2, 0.6, 0.0)*N),
-    female = rbinom(N, 1, prob = 0.51),
-    age = sample(18:80, N, replace = TRUE),
-    income = sample(1:10, N, replace = TRUE),
-    educ = sample(1:16, N, replace = TRUE),
-    U = runif(N),
-    corp_perc = (rnorm(N) + U +
-                   0.008 *age  +
-                   0.02 * female +
-                   -0.1 * income +
-                   0.05 * educ),
+    U = rnorm(N),
     # potential outcomes of Y with respect to D
     potential_outcomes(
       Y ~ case_when(
-        type == "Always-Taker" ~ corp_perc - 0.025 - 0.05 * D,
-        type == "Never-Taker" ~ corp_perc + 0.075 - 0.025 * D,
-        type == "Complier" ~ corp_perc + 0.025 + 0.05 * D,
-        type == "Defier" ~ corp_perc - 0.025 - 0.05 * D
+        type == "Always-Taker" ~ - 0.25 - 0.50 * D + U,
+        type == "Never-Taker" ~ 0.75 - 0.25 * D + U,
+        type == "Complier" ~ 0.25 + 0.50 * D + U,
+        type == "Defier" ~ - 0.25 - 0.50 * D + U
       ),
       conditions = list(D = c(0, 1))
     ),
@@ -64,44 +57,55 @@ M1 <-
     ),
     potential_outcomes(
       Y ~ case_when(
-        Z == 1 & type == "Always-Taker" ~ likert_cut(corp_perc - 0.025 - 0.050 * 1),
-        Z == 1 & type == "Never-Taker" ~ likert_cut(corp_perc + 0.075 - 0.025 * 0),
-        Z == 1 & type == "Complier" ~ likert_cut(corp_perc + 0.025 + 0.050 * 1),
-        Z == 1 & type == "Defier" ~ likert_cut(corp_perc - 0.025 - 0.050 * 0),
-        Z == 0 & type == "Always-Taker" ~ likert_cut(corp_perc - 0.025 - 0.050 * 1),
-        Z == 0 & type == "Never-Taker" ~ likert_cut(corp_perc + 0.075 - 0.025 * 0),
-        Z == 0 & type == "Complier" ~ likert_cut(corp_perc + 0.025 + 0.050 * 0),
-        Z == 0 & type == "Defier" ~ likert_cut(corp_perc - 0.025 - 0.050 * 1)
+        Z == 1 & type == "Always-Taker" ~ - 0.25 - 0.50 * 1 + U,
+        Z == 1 & type == "Never-Taker" ~ 0.75 - 0.25 * 0 + U,
+        Z == 1 & type == "Complier" ~ 0.25 + 0.50 * 1 + U,
+        Z == 1 & type == "Defier" ~ -0.25 - 0.50 * 0 + U,
+        Z == 0 & type == "Always-Taker" ~ -0.25 - 0.50 * 1 + U,
+        Z == 0 & type == "Never-Taker" ~ 0.75 - 0.25 * 0 + U,
+        Z == 0 & type == "Complier" ~ 0.25 + 0.50 * 0 + U,
+        Z == 0 & type == "Defier" ~ -0.25 - 0.50 * 1 + U
       ),
       conditions = list(Z = c(0, 1))
     )
   ) +
   declare_inquiry(
-    ATE = mean(Y_D_1 - Y_D_0),
-    CACE = mean(Y_D_1[type == "Complier"] - Y_D_0[type == "Complier"])) +
-  declare_assignment(Z = conduct_ra(N = N)) +
-  declare_measurement(D = reveal_outcomes(D ~ Z),
-                      Y = reveal_outcomes(Y ~ D)) +
+    CACE = mean(Y_D_1[type == "Complier"] - Y_D_0[type == "Complier"]),
+    ITT = mean(Y_Z_1 - Y_Z_0)
+  ) +
+  declare_assignment(Z = conduct_ra(N = 100)) +
+  declare_measurement(D = reveal_outcomes(D ~ Z), Y = reveal_outcomes(Y ~ D+Z)) +
   declare_estimator(
     Y ~ D | Z,
     .method = iv_robust,
-    inquiry = c("ATE", "CACE"),
+    inquiry = c("CACE", "ITT"),
     label = "Two stage least squares"
-  ) +
-  declare_estimator(
-    Y ~ D,
-    .method = lm_robust,
-    inquiry = c("ATE", "CACE"),
-    label = "As treated"
-  ) +
-  declare_estimator(
-    Y ~ D,
-    .method = lm_robust,
-    inquiry = c("ATE", "CACE"),
-    subset = D == Z,
-    label = "Per protocol"
   )
 
+#Diagnosis
+
+diagnosis_m <-
+  diagnose_design(
+    model,
+    diagnosands = declare_diagnosands(
+      bias = mean(estimate - estimand),
+      true_se = sd(estimate),
+      power = mean(p.value <= 0.05),
+      coverage = mean(estimand <= conf.high &
+                        estimand >= conf.low)
+    )
+  )
+
+summary(diagnosis_m)
+
+#Simulaciones aumentando sample size
+
+designs <- redesign(model, N = seq(from=200, to=10000, by=300))
+designs <- diagnose_designs(designs)
+
+sum<-summary(designs)
+
+write.table(summary(designs), file=paste0(Data, "/summary.txt"))
 #Diagnosis
 
 diagnosis_M1 <-
